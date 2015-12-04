@@ -3,7 +3,20 @@ import argparse, subprocess, json, os, urllib2, sys, base64, binascii, time, \
     hashlib, tempfile, re, copy, textwrap
 
 
-def sign_csr(pubkey, csr, email=None, file_based=False):
+def openssl_dgst(privkey, filename, signame, what=None):
+    if what is None:
+        what = 'file %s' % filename
+    sys.stderr.write("Signing %s with your private key...\n" % what)
+    proc = subprocess.Popen(
+        ["openssl", "dgst", "-sha256", "-sign", privkey, "-out", signame, filename],
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    out, err = proc.communicate()
+    if proc.returncode != 0:
+        raise IOError("Error running openssl dgst: %s" % err)
+
+
+def sign_csr(pubkey, csr, email=None, file_based=False,
+             private_key=None, webroots=None, testing=False):
     """Use the ACME protocol to get an ssl certificate signed by a
     certificate authority.
 
@@ -20,8 +33,10 @@ def sign_csr(pubkey, csr, email=None, file_based=False):
     :rtype: string
 
     """
-    #CA = "https://acme-staging.api.letsencrypt.org"
-    CA = "https://acme-v01.api.letsencrypt.org"
+    if testing:
+        CA = "https://acme-staging.api.letsencrypt.org"
+    else:
+        CA = "https://acme-v01.api.letsencrypt.org"
     TERMS = "https://letsencrypt.org/documents/LE-SA-v1.0.1-July-27-2015.pdf"
     nonce_req = urllib2.Request("{}/directory".format(CA))
     nonce_req.get_method = lambda : 'HEAD'
@@ -78,7 +93,9 @@ def sign_csr(pubkey, csr, email=None, file_based=False):
     sys.stderr.write("Found domains {}\n".format(", ".join(domains)))
 
     # Step 3: Ask user for contact email
-    if not email:
+    if email == 'default':
+        email = "webmaster@{}".format(min(domains, key=len))
+    elif not email:
         default_email = "webmaster@{}".format(min(domains, key=len))
         stdout = sys.stdout
         sys.stdout = sys.stderr
@@ -138,6 +155,12 @@ def sign_csr(pubkey, csr, email=None, file_based=False):
             "sig_name": id_file_sig_name,
         })
 
+        if webroots and not os.path.islink(os.path.join(webroots, domain)):
+            stdout = sys.stdout
+            sys.stdout = sys.stderr
+            raw_input('Missing webroot DocRoot symlink for %s, press Enter to create dir.' % domain)
+            sys.stdout = stdout
+
     # need signature for the final certificate issuance
     sys.stderr.write("Building request for CSR...\n")
     proc = subprocess.Popen(["openssl", "req", "-in", csr, "-outform", "DER"],
@@ -161,22 +184,28 @@ def sign_csr(pubkey, csr, email=None, file_based=False):
     csr_file_sig_name = os.path.basename(csr_file_sig.name)
 
     # Step 5: Ask the user to sign the registration and requests
-    sys.stderr.write("""\
-STEP 2: You need to sign some files (replace 'user.key' with your user private key).
+    if private_key:
+        openssl_dgst(private_key, reg_file_name, reg_file_sig_name, 'registration request')
+        for i in ids:
+          openssl_dgst(private_key, i['file_name'], i['sig_name'], 'domain %s request' % i['domain'])
+        openssl_dgst(private_key, csr_file_name, csr_file_sig_name, 'CSR request')
+    else:
+        sys.stderr.write("""\
+    STEP 2: You need to sign some files (replace 'user.key' with your user private key).
 
-openssl dgst -sha256 -sign user.key -out {} {}
-{}
-openssl dgst -sha256 -sign user.key -out {} {}
+    openssl dgst -sha256 -sign user.key -out {} {}
+    {}
+    openssl dgst -sha256 -sign user.key -out {} {}
 
-""".format(
-    reg_file_sig_name, reg_file_name,
-    "\n".join("openssl dgst -sha256 -sign user.key -out {} {}".format(i['sig_name'], i['file_name']) for i in ids),
-    csr_file_sig_name, csr_file_name))
+    """.format(
+        reg_file_sig_name, reg_file_name,
+        "\n".join("openssl dgst -sha256 -sign user.key -out {} {}".format(i['sig_name'], i['file_name']) for i in ids),
+        csr_file_sig_name, csr_file_name))
 
-    stdout = sys.stdout
-    sys.stdout = sys.stderr
-    raw_input("Press Enter when you've run the above commands in a new terminal window...")
-    sys.stdout = stdout
+        stdout = sys.stdout
+        sys.stdout = sys.stderr
+        raw_input("Press Enter when you've run the above commands in a new terminal window...")
+        sys.stdout = stdout
 
     # Step 6: Load the signatures
     reg_file_sig.seek(0)
@@ -262,6 +291,7 @@ openssl dgst -sha256 -sign user.key -out {} {}
             "file_name": test_file_name,
             "sig": test_file_sig,
             "sig_name": test_file_sig_name,
+            "domain": i['domain'],
         })
 
         # challenge response for server
@@ -271,19 +301,23 @@ openssl dgst -sha256 -sign user.key -out {} {}
         })
 
     # Step 9: Ask the user to sign the challenge responses
-    sys.stderr.write("""\
-STEP 3: You need to sign some more files (replace 'user.key' with your user private key).
+    if private_key:
+        for i in tests:
+            openssl_dgst(private_key, i['file_name'], i['sig_name'], 'challenge response for %s' % i['domain'])
+    else:
+        sys.stderr.write("""\
+    STEP 3: You need to sign some more files (replace 'user.key' with your user private key).
 
-{}
+    {}
 
-""".format(
-    "\n".join("openssl dgst -sha256 -sign user.key -out {} {}".format(
-        i['sig_name'], i['file_name']) for i in tests)))
+    """.format(
+        "\n".join("openssl dgst -sha256 -sign user.key -out {} {}".format(
+            i['sig_name'], i['file_name']) for i in tests)))
 
-    stdout = sys.stdout
-    sys.stdout = sys.stderr
-    raw_input("Press Enter when you've run the above commands in a new terminal window...")
-    sys.stdout = stdout
+        stdout = sys.stdout
+        sys.stdout = sys.stderr
+        raw_input("Press Enter when you've run the above commands in a new terminal window...")
+        sys.stdout = stdout
 
     # Step 10: Load the response signatures
     for n, i in enumerate(ids):
@@ -292,7 +326,14 @@ STEP 3: You need to sign some more files (replace 'user.key' with your user priv
 
     # Step 11: Ask the user to host the token on their server
     for n, i in enumerate(ids):
-        if file_based:
+        if webroots:
+            path = os.path.join(webroots, i['domain'], responses[n]['uri'])
+            if not os.path.isdir(os.path.dirname(path)):
+                os.makedirs(os.path.dirname(path))
+            with open(path, 'w') as domain_resp:
+                domain_resp.write(responses[n]['data'])
+                domain_resp.flush()
+        elif file_based:
             sys.stderr.write("""\
 STEP {}: Please update your server to serve the following file at this URL:
 
@@ -396,7 +437,10 @@ sudo python -c "import BaseHTTPServer; \\
 
     # Step 15: Convert the signed cert from DER to PEM
     sys.stderr.write("Certificate signed!\n")
-    sys.stderr.write("You can stop running the python command on your server (Ctrl+C works).\n")
+    if webroots:
+        sys.stderr.write("You can now restart your web server.\n")
+    elif not file_based:
+        sys.stderr.write("You can stop running the python command on your server (Ctrl+C works).\n")
     signed_der64 = base64.b64encode(signed_der)
     signed_pem = """\
 -----BEGIN CERTIFICATE-----
@@ -433,11 +477,14 @@ $ python sign_csr.py --public-key user.pub domain.csr > signed.crt
 
 """)
     parser.add_argument("-p", "--public-key", required=True, help="path to your account public key")
+    parser.add_argument("-k", "--private-key", default=None, help="path to your account private key")
     parser.add_argument("-e", "--email", default=None, help="contact email, default is webmaster@<shortest_domain>")
     parser.add_argument("-f", "--file-based", action='store_true', help="if set, a file-based response is used")
+    parser.add_argument("-w", "--webroots", default=None, help="dir with symlinked roots per domain to write file-based responses to")
+    parser.add_argument("-t", "--testing", action='store_true', help="use testing acme servers")
     parser.add_argument("csr_path", help="path to your certificate signing request")
 
     args = parser.parse_args()
-    signed_crt = sign_csr(args.public_key, args.csr_path, email=args.email, file_based=args.file_based)
+    signed_crt = sign_csr(args.public_key, args.csr_path, email=args.email, file_based=args.file_based, private_key=args.private_key, webroots=args.webroots, testing=args.testing)
     sys.stdout.write(signed_crt)
 

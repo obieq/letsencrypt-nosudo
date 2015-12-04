@@ -3,15 +3,17 @@ import argparse, subprocess, json, os, urllib2, sys, base64, binascii, copy, \
     tempfile, re
 
 
-def revoke_crt(pubkey, crt):
+def revoke_crt(pubkey, crt, testing=False):
     """Use the ACME protocol to revoke an ssl certificate signed by a
     certificate authority.
 
     :param string pubkey: Path to the user account public key.
     :param string crt: Path to the signed certificate.
     """
-    #CA = "https://acme-staging.api.letsencrypt.org"
-    CA = "https://acme-v01.api.letsencrypt.org"
+    if testing:
+        CA = "https://acme-staging.api.letsencrypt.org"
+    else:
+        CA = "https://acme-v01.api.letsencrypt.org"
     TERMS = "https://letsencrypt.org/documents/LE-SA-v1.0.1-July-27-2015.pdf"
     nonce_req = urllib2.Request("{}/directory".format(CA))
     nonce_req.get_method = lambda : 'HEAD'
@@ -125,13 +127,14 @@ Prerequisites:
 
 Example:
 --------------
-$ python revoke_crt.py --public-key user.pub domain.crt
+$ python revoke_crt.py --public-key user.pub [--testing] domain.crt
 --------------
 
 """)
     parser.add_argument("-p", "--public-key", required=True, help="path to your account public key")
+    parser.add_argument("-t", "--testing", action="store_true", "use testing acme servers")
     parser.add_argument("crt_path", help="path to your signed certificate")
 
     args = parser.parse_args()
-    revoke_crt(args.public_key, args.crt_path)
+    revoke_crt(args.public_key, args.crt_path, testing)
 
