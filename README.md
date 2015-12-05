@@ -74,7 +74,7 @@ openssl req -new -sha256 -key domain.key -subj "/CN=example.com" > domain.csr
 
 #Alternatively, if you want both example.com and www.example.com
 openssl genrsa 4096 > domain.key
-openssl req -new -sha256 -key domain.key -subj "/" -reqexts SAN -config <(cat /etc/ssl/openssl.cnf <(printf "[SAN]\nsubjectAltName=DNS:example.com,DNS:www.example.com")) > domain.csr
+openssl req -new -sha256 -key domain.key -subj "/" -reqexts SAN -config <(cat /etc/ssl/openssl.cnf; printf "[SAN]\nsubjectAltName=DNS:example.com,DNS:www.example.com") > domain.csr
 ```
 
 Third, you run the script using python and passing in the path to your user
