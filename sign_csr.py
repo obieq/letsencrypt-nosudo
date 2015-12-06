@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 import argparse, subprocess, json, os, urllib2, sys, base64, binascii, time, \
-    hashlib, tempfile, re, copy, textwrap
+    hashlib, tempfile, re, copy, textwrap, tutum_service
 
 
 def openssl_dgst(privkey, filename, signame, what=None):
@@ -16,7 +16,8 @@ def openssl_dgst(privkey, filename, signame, what=None):
 
 
 def sign_csr(pubkey, csr, email=None, file_based=False,
-             private_key=None, webroots=None, testing=False):
+             private_key=None, webroots=None, testing=False, osx=False,
+             domain_to_service_mappings=None):
     """Use the ACME protocol to get an ssl certificate signed by a
     certificate authority.
 
@@ -326,7 +327,17 @@ def sign_csr(pubkey, csr, email=None, file_based=False,
 
     # Step 11: Ask the user to host the token on their server
     for n, i in enumerate(ids):
-        if webroots:
+        if osx:
+            # verify domain name to tutum service name mapping was provided
+            if domain_to_service_mappings == None: raise ValueError('domain_to_service_mappings json cannot be blank')
+
+            # grab the service name given the domain name
+            j = json.loads(args.domain_to_service_mappings)
+            service_name = j[i['domain']]
+
+            # update the tutum service's env var and re-deploy
+            tutum_service.set_env_var_for_service(service_name, responses[n]['data'])
+        elif webroots:
             path = os.path.join(webroots, i['domain'], responses[n]['uri'])
             if not os.path.isdir(os.path.dirname(path)):
                 os.makedirs(os.path.dirname(path))
@@ -482,9 +493,13 @@ $ python sign_csr.py --public-key user.pub domain.csr > signed.crt
     parser.add_argument("-f", "--file-based", action='store_true', help="if set, a file-based response is used")
     parser.add_argument("-w", "--webroots", default=None, help="dir with symlinked roots per domain to write file-based responses to")
     parser.add_argument("-t", "--testing", action='store_true', help="use testing acme servers")
+    parser.add_argument("-o", "--osx", action='store_true', help="operating system is OSX")
+    parser.add_argument("-m", "--domain-to-service-mappings", default=None, help="json string that maps each domain name to its corresponding tutum service name")
     parser.add_argument("csr_path", help="path to your certificate signing request")
 
     args = parser.parse_args()
-    signed_crt = sign_csr(args.public_key, args.csr_path, email=args.email, file_based=args.file_based, private_key=args.private_key, webroots=args.webroots, testing=args.testing)
+    signed_crt = sign_csr(args.public_key, args.csr_path, email=args.email, file_based=args.file_based,
+                          private_key=args.private_key, webroots=args.webroots, testing=args.testing,
+                          osx=args.osx, domain_to_service_mappings=args.domain_to_service_mappings)
     sys.stdout.write(signed_crt)
 
