@@ -6,6 +6,7 @@ usage() {
    create_certs.sh main.domain [some extra domains...]
 
    TESTING=1 DOMAIN_TO_SERVICE_MAPPINGS='{"www.acme.com":"tutum-service-name-1","acme.com":"tutum-service-name-2"}' OSX=1 EMAIL=widgets@acme.com LEDIR=~/xxxx/xxxx ./create_cert.sh www.acme.com acme.com
+   TESTING=1 DOMAIN_TO_S3_MAPPINGS='{"www.acme.com":"s3-bucket-name-1","acme.com":"s3-bucket-name-2"}' OSX=1 EMAIL=widgets@acme.com LEDIR=~/xxxx/xxxx ./create_cert.sh www.acme.com acme.com
 
 EOF
   exit 0
@@ -32,6 +33,8 @@ EOF
 : ${OSX:=0}
 # domain name to tutum service name mappings
 : ${DOMAIN_TO_SERVICE_MAPPINGS}
+# domain name to s3 bucket mappings
+: ${DOMAIN_TO_S3_MAPPINGS}
 
 custom_ssl_config() {
   if [ "$OSX" ] # Mac OSX
@@ -63,6 +66,7 @@ sign() {
     --public-key "$ACCOUNT_PUB" \
     ${OSX:+--osx} \
     ${DOMAIN_TO_SERVICE_MAPPINGS:+--domain-to-service-mappings "$DOMAIN_TO_SERVICE_MAPPINGS"} \
+    ${DOMAIN_TO_S3_MAPPINGS:+--domain-to-s3-mappings "$DOMAIN_TO_S3_MAPPINGS"} \
     ${ACCOUNT_KEY:+--private-key "$ACCOUNT_KEY"} \
     ${TESTING:+--testing} \
     ${WEBROOTS:+--webroots "$WEBROOTS"} \

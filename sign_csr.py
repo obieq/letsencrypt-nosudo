@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 import argparse, subprocess, json, os, urllib2, sys, base64, binascii, time, \
-    hashlib, tempfile, re, copy, textwrap, tutum_service
+    hashlib, tempfile, re, copy, textwrap, tutum_service, s3
 
 
 def openssl_dgst(privkey, filename, signame, what=None):
@@ -17,7 +17,8 @@ def openssl_dgst(privkey, filename, signame, what=None):
 
 def sign_csr(pubkey, csr, email=None, file_based=False,
              private_key=None, webroots=None, testing=False, osx=False,
-             domain_to_service_mappings=None):
+             domain_to_service_mappings=None,
+             domain_to_s3_mappings=None):
     """Use the ACME protocol to get an ssl certificate signed by a
     certificate authority.
 
@@ -329,14 +330,25 @@ def sign_csr(pubkey, csr, email=None, file_based=False,
     for n, i in enumerate(ids):
         if osx:
             # verify domain name to tutum service name mapping was provided
-            if domain_to_service_mappings == None: raise ValueError('domain_to_service_mappings json cannot be blank')
+            if domain_to_service_mappings == None and domain_to_s3_mappings == None:
+                raise ValueError('both domain_to_service_mappings and domain_to_s3_mappings cannot be blank')
 
             # grab the service name given the domain name
-            j = json.loads(args.domain_to_service_mappings)
-            service_name = j[i['domain']]
+            tutum_json  = json.loads(args.domain_to_service_mappings) if domain_to_service_mappings != None else {}
+            s3_json     = json.loads(args.domain_to_s3_mappings) if domain_to_s3_mappings != None else {}
+            domain_name = i['domain']
 
-            # update the tutum service's env var and re-deploy
-            tutum_service.set_env_var_for_service(service_name, responses[n]['data'])
+            if tutum_json.get(domain_name) != None:
+                # update the tutum service's env var and re-deploy
+                service_name = tutum_json[domain_name]
+                tutum_service.set_env_var_for_service(service_name, responses[n]['data'])
+            elif s3_json.get(domain_name) != None:
+                # copy verification text to s3
+                bucket_name = s3_json[domain_name]
+                s3.copy_verification_text(bucket_name, responses[n]['data'])
+            else:
+                raise ValueError('no mapping provided for the following domain name: ' + domain_name)
+
         elif webroots:
             path = os.path.join(webroots, i['domain'], responses[n]['uri'])
             if not os.path.isdir(os.path.dirname(path)):
@@ -495,11 +507,12 @@ $ python sign_csr.py --public-key user.pub domain.csr > signed.crt
     parser.add_argument("-t", "--testing", action='store_true', help="use testing acme servers")
     parser.add_argument("-o", "--osx", action='store_true', help="operating system is OSX")
     parser.add_argument("-m", "--domain-to-service-mappings", default=None, help="json string that maps each domain name to its corresponding tutum service name")
+    parser.add_argument("-s3", "--domain-to-s3-mappings", default=None, help="json string that maps each domain name to its corresponding s3 bucket")
     parser.add_argument("csr_path", help="path to your certificate signing request")
 
     args = parser.parse_args()
     signed_crt = sign_csr(args.public_key, args.csr_path, email=args.email, file_based=args.file_based,
                           private_key=args.private_key, webroots=args.webroots, testing=args.testing,
-                          osx=args.osx, domain_to_service_mappings=args.domain_to_service_mappings)
+                          osx=args.osx, domain_to_service_mappings=args.domain_to_service_mappings,
+                          domain_to_s3_mappings=args.domain_to_s3_mappings)
     sys.stdout.write(signed_crt)
-
